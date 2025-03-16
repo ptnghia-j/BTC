@@ -1,0 +1,77 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: spectrogram-labeling-job
+  namespace: csuf-titans
+  labels:
+    app: spectrogram-labeling
+spec:
+  backoffLimit: 1              
+  template:
+    metadata:
+      labels:
+        app: spectrogram-labeling
+    spec:
+      restartPolicy: Never
+      initContainers:
+        - name: download-audio
+          image: alpine:3.16
+          imagePullPolicy: IfNotPresent
+          command:
+            - sh
+            - -c
+            - |
+              set -ex
+              apk update && apk add --no-cache curl unzip
+              mkdir -p /data
+              cd /data
+              if [ ! -f fma_medium.zip ]; then
+                echo "Downloading fma_medium.zip..."
+                curl -LO "https://os.unil.cloud.switch.ch/fma/fma_medium.zip"
+              else
+                echo "fma_medium.zip already exists, skipping download."
+              fi
+              if [ ! -d fma_small ]; then
+                echo "Extracting fma_medium.zip..."
+                unzip -o fma_medium.zip -d fma_temp
+                # Assume the extracted folder is named "fma_medium". Rename or move desired files/subset to fma_small.
+                if [ -d fma_temp/fma_medium ]; then
+                  mv fma_temp/fma_medium fma_small
+                else
+                  echo "Expected folder fma_temp/fma_medium not found. Please verify archive structure."
+                  exit 1
+                fi
+                rm -rf fma_temp
+              else
+                echo "fma_small already exists, skipping extraction."
+              fi
+          volumeMounts:
+            - name: storage
+              mountPath: /data
+      containers:
+        - name: spectrogram-labeler
+          image: pytorch/pytorch:1.9.0-cuda11.1-cudnn8-runtime
+          workingDir: /mnt/storage/ChordMini
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: PYTHONPATH
+              value: /mnt/storage/ChordMini
+          command:
+            - sh
+            - -c
+            - |
+              set -ex
+              echo "Running spectrogram_labeler.py..."
+              python spectrogram_labeler.py --audio_dir ../data/fma_small --save_dir ../data/synth
+          volumeMounts:
+            - name: storage
+              mountPath: /mnt/storage
+            - name: storage-data
+              mountPath: /data
+      volumes:
+        - name: storage
+          persistentVolumeClaim:
+            claimName: temporary-storage
+        - name: storage-data
+          persistentVolumeClaim:
+            claimName: temporary-storage

@@ -1,0 +1,11 @@
+pyyaml
+mir_eval
+pretty_midi
+torch
+numpy
+pyrubberband
+librosa
+matplotlib
+PySoundFile
+tqdm         # added for progress display in training/prediction scripts
+gdown        # added for downloading data via the YAML job
