@@ -1,0 +1,112 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: maestro-spectrogram-labeling-job
+  namespace: csuf-titans
+  labels:
+    app: spectrogram-labeling
+spec:
+  backoffLimit: 2
+  template:
+    metadata:
+      labels:
+        app: spectrogram-labeling
+    spec:
+      restartPolicy: Never
+      tolerations:
+      - key: "node.kubernetes.io/not-ready"
+        operator: "Exists"
+        effect: "NoExecute"
+        tolerationSeconds: 86400
+      - key: "node.kubernetes.io/unreachable"
+        operator: "Exists"
+        effect: "NoExecute"
+        tolerationSeconds: 86400
+      - key: "nvidia.com/gpu"
+        operator: "Exists"
+        effect: "PreferNoSchedule"
+      initContainers:
+        - name: setup
+          image: alpine:3.16
+          imagePullPolicy: IfNotPresent
+          command:
+            - sh
+            - -c
+            - |
+              set -ex
+              echo "[$(date)] Starting setup..."
+              
+              echo "[$(date)] Installing packages..."
+              apk update && apk add --no-cache git curl python3 py3-pip tzdata bash
+              
+              echo "[$(date)] Creating directories..."
+              mkdir -p /mnt/storage/BTC
+              
+              echo "[$(date)] Cloning repository..."
+              cd /mnt/storage
+              if ! git clone --depth 1 https://gitlab.com/ptnghia-j/BTC BTC; then
+                echo "[$(date)] Failed to clone repository, retrying..."
+                rm -rf BTC || true
+                git clone --depth 1 https://gitlab.com/ptnghia-j/BTC BTC
+              fi
+              
+              if [ ! -d "BTC" ]; then
+                echo "[$(date)] ERROR: Repository clone failed even after retry"
+                exit 1
+              fi
+              
+              echo "[$(date)] Repository cloned successfully."
+              echo "[$(date)] Setup completed successfully."
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "1Gi"
+            limits:
+              cpu: "1"
+              memory: "2Gi"
+          volumeMounts:
+            - name: storage
+              mountPath: /mnt/storage
+      containers:
+        - name: spectrogram-labeler
+          image: pytorch/pytorch:1.9.0-cuda11.1-cudnn8-runtime
+          workingDir: /mnt/storage/BTC
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: PYTHONPATH
+              value: /mnt/storage/BTC
+          command:
+            - bash
+            - -c
+            - |
+              set -ex
+              echo "Installing system dependencies..."
+              apt-get update && apt-get install -y libsndfile1 ffmpeg
+              
+              echo "Installing Python dependencies..."
+              pip install --no-cache-dir -r requirements.txt
+              
+              echo "Creating destination directories..."
+              mkdir -p /mnt/storage/data/maestro_synth/spectrograms
+              mkdir -p /mnt/storage/data/maestro_synth/labels
+              
+              echo "Running spectrogram_labeler.py for maestro..."
+              python spectrogram_labeler.py --audio_dir /mnt/storage/data/maestro --save_dir /mnt/storage/data/maestro_synth --dataset maestro
+              
+              echo "Job completed!"
+          resources:
+            requests:
+              cpu: "1"
+              memory: "2Gi"
+              nvidia.com/gpu: "1"
+            limits:
+              cpu: "2"
+              memory: "4Gi"
+              nvidia.com/gpu: "1"
+          volumeMounts:
+            - name: storage
+              mountPath: /mnt/storage
+      volumes:
+        - name: storage
+          persistentVolumeClaim:
+            claimName: temporary-storage

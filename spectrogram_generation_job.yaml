@@ -1,7 +1,7 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: spectrogram-labeling-job-v3
+  name: spectrogram-labeling-job
   namespace: csuf-titans
   labels:
     app: spectrogram-labeling
@@ -37,11 +37,10 @@ spec:
               echo "[$(date)] Starting setup..."
               
               echo "[$(date)] Installing packages..."
-              apk update && apk add --no-cache git curl wget unzip python3 py3-pip ffmpeg tzdata bash
+              apk update && apk add --no-cache git curl python3 py3-pip tzdata bash
               
               echo "[$(date)] Creating directories..."
               mkdir -p /mnt/storage/BTC
-              mkdir -p /mnt/storage/data
               
               echo "[$(date)] Cloning repository..."
               cd /mnt/storage
@@ -57,73 +56,14 @@ spec:
               fi
               
               echo "[$(date)] Repository cloned successfully."
-              
-              echo "[$(date)] Starting dataset download (this can take a while)..."
-              cd /mnt/storage/data
-              
-              # First check for existing fma_medium directory or data
-              if [ -d "fma_medium" ] && [ "$(find fma_medium -type f | wc -l)" -gt 10 ]; then
-                echo "[$(date)] fma_medium directory already exists with files, skipping download"
-              else
-                # Try multiple download methods with retries
-                for i in 1 2 3; do
-                  echo "[$(date)] Download attempt $i..."
-                  wget --timeout=900 --tries=3 --progress=dot:giga -O fma_medium.zip "https://os.unil.cloud.switch.ch/fma/fma_medium.zip" && break || \
-                  curl -L --max-time 900 --retry 3 --progress-bar -o fma_medium.zip "https://os.unil.cloud.switch.ch/fma/fma_medium.zip" && break
-                  echo "[$(date)] Attempt $i failed, waiting before retry..."
-                  sleep 30
-                done
-                
-                if [ -f fma_medium.zip ] && [ "$(stat -c %s fma_medium.zip 2>/dev/null || stat -f %z fma_medium.zip)" -gt 1000000 ]; then
-                  echo "[$(date)] Download complete, file size: $(ls -lh fma_medium.zip | awk '{print $5}')"
-                  
-                  echo "[$(date)] Checking disk space before extraction:"
-                  df -h .
-                  
-                  echo "[$(date)] Extracting dataset (this can take a while)..."
-                  mkdir -p fma_medium
-                  unzip -o -j fma_medium.zip -d ./fma_medium || true
-                  
-                  # Verify extraction succeeded
-                  file_count=$(find ./fma_medium -type f | wc -l)
-                  echo "[$(date)] Found $file_count files in fma_medium directory"
-                  
-                  if [ "$file_count" -lt 10 ]; then
-                    echo "[$(date)] Extraction produced too few files, creating sample test files"
-                    # Create some dummy files for testing if extraction failed
-                    for j in $(seq 1 20); do
-                      echo "test audio data" > "./fma_medium/test_sample_$j.mp3"
-                    done
-                  fi
-                else
-                  echo "[$(date)] Download failed or file too small, creating sample test files"
-                  mkdir -p fma_medium
-                  for j in $(seq 1 20); do
-                    echo "test audio data" > "./fma_medium/test_sample_$j.mp3"
-                  done
-                fi
-              fi
-              
-              # Final verification
-              file_count=$(find ./fma_medium -type f | wc -l)
-              echo "[$(date)] Final verification: Found $file_count files in fma_medium directory"
-              
-              if [ "$file_count" -eq 0 ]; then
-                echo "[$(date)] ERROR: No files found in the fma_medium directory!"
-                mkdir -p fma_medium
-                for j in $(seq 1 5); do
-                  echo "test audio data" > "./fma_medium/emergency_sample_$j.mp3"
-                done
-              fi
-              
               echo "[$(date)] Setup completed successfully."
           resources:
             requests:
               cpu: "500m"
-              memory: "2Gi"
+              memory: "1Gi"
             limits:
               cpu: "1"
-              memory: "4Gi"
+              memory: "2Gi"
           volumeMounts:
             - name: storage
               mountPath: /mnt/storage
@@ -152,6 +92,7 @@ spec:
               
               echo "Checking audio dir contents:"
               find /mnt/storage/data/fma_medium -type f | head -10
+              
               # Added check: ensure there are audio files to process
               audio_count=$(find /mnt/storage/data/fma_medium -type f | wc -l)
               if [ "$audio_count" -eq 0 ]; then

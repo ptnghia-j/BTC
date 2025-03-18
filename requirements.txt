@@ -4,7 +4,7 @@ pretty_midi
 torch
 numpy
 pyrubberband
-librosa
+librosa>=0.10.0  # Updated to use the newer API
 matplotlib
 PySoundFile
 tqdm         # added for progress display in training/prediction scripts

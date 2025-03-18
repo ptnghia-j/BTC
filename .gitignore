@@ -86,3 +86,4 @@ data/
 
 # Other temporary files
 *.swp
+.qodo

@@ -3,16 +3,22 @@ import argparse
 import numpy as np
 import torch
 import librosa
+import warnings
 from utils.hparams import HParams
 from btc_model import BTC_model
 from utils.mir_eval_modules import audio_file_to_features, idx2chord, idx2voca_chord, get_audio_paths
 from utils import logger
+
+# Filter out the FutureWarning from librosa
+warnings.filterwarnings("ignore", category=FutureWarning, module="librosa")
 
 def main():
     parser = argparse.ArgumentParser(description="Process audio from data/fma_small into labels and spectrograms.")
     parser.add_argument('--voca', default=True, type=lambda x: (str(x).lower()=='true'))
     parser.add_argument('--audio_dir', type=str, default='./data/fma_small')
     parser.add_argument('--save_dir', type=str, default='./data/synth')
+    # New argument to indicate dataset type
+    parser.add_argument('--dataset', type=str, default='fma', choices=['fma', 'maestro'])
     args = parser.parse_args()
     
     logger.logging_verbosity(1)
@@ -32,8 +38,8 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = BTC_model(config=config.model).to(device)
     if os.path.isfile(model_file):
-        # Set weights_only=False to load the full checkpoint safely
-        checkpoint = torch.load(model_file, map_location=device, weights_only=False)
+        # Remove weights_only parameter as it's not supported in PyTorch 1.9.0
+        checkpoint = torch.load(model_file, map_location=device)
         mean = checkpoint['mean']
         std = checkpoint['std']
         model.load_state_dict(checkpoint['model'])
@@ -58,6 +64,11 @@ def main():
     audio_paths = get_audio_paths(args.audio_dir)
     logger.info(f"Found {len(audio_paths)} audio files.")
     
+    # For maestro, use the dataset folder structure
+    if args.dataset == "maestro":
+        # Do not pre-create fixed folders; use relative path from audio_dir
+        logger.info("Processing maestro dataset with organized subfolders.")
+    
     # Create sub-folders for spectrograms and labels based on audio file IDs
     for i in range(343):  # Create folders for 000-342 for 343 days of audio
         folder_name = f"{i:03d}"
@@ -75,16 +86,21 @@ def main():
             logger.info(f"Skipping file {audio_path}: {e}")
             continue
         
-        # Determine subfolder and filename
+        # Determine subfolder: for maestro, use the relative path first folder; otherwise group by thousands.
         file_id = os.path.basename(audio_path).split('.')[0]
-        try:
-            folder_name = f"{int(file_id)//1000:03d}"  # Group by thousands (000, 001, etc.)
-        except ValueError:
-            # If file_id can't be converted to int, use a default folder
-            folder_name = "000"
+        if args.dataset == "maestro":
+            rel_path = os.path.relpath(os.path.dirname(audio_path), args.audio_dir)
+            folder_name = rel_path.split(os.sep)[0]
+        else:
+            try:
+                folder_name = f"{int(file_id)//1000:03d}"
+            except ValueError:
+                folder_name = "000"
         
         spec_save_dir = os.path.join(base_spec_save_dir, folder_name)
         lab_save_dir = os.path.join(base_lab_save_dir, folder_name)
+        os.makedirs(spec_save_dir, exist_ok=True)
+        os.makedirs(lab_save_dir, exist_ok=True)
         
         # Save spectrogram (transposed) as a numpy file
         spec = feature.T  # CQT spectrogram with shape [time, frequency]

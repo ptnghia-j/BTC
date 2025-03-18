@@ -1,0 +1,44 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: btc-cleanup-job
+  namespace: csuf-titans
+  labels:
+    app: btc-cleanup
+spec:
+  backoffLimit: 0
+  template:
+    metadata:
+      labels:
+        app: btc-cleanup
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: cleanup
+        image: alpine:3.16
+        command:
+        - sh
+        - -c
+        - |
+          set -ex
+          echo "Removing BTC repository from storage..."
+          if [ -d "/mnt/storage/BTC" ]; then
+            rm -rf /mnt/storage/BTC
+            echo "BTC repository successfully removed."
+          else
+            echo "BTC repository not found."
+          fi
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "128Mi"
+          limits:
+            cpu: "200m"
+            memory: "256Mi"
+        volumeMounts:
+        - name: storage
+          mountPath: /mnt/storage
+      volumes:
+      - name: storage
+        persistentVolumeClaim:
+          claimName: temporary-storage

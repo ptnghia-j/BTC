@@ -1,0 +1,44 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: storage-access-pod
+  namespace: csuf-titans
+  labels:
+    app: storage-access
+spec:
+  restartPolicy: Never
+  containers:
+  - name: storage-inspector
+    image: ubuntu:20.04
+    command:
+    - bash
+    - -c
+    - |
+      apt-get update && apt-get install -y curl wget unzip python3 nano vim less ffmpeg && \
+      echo "Storage access pod is ready. Use 'kubectl exec -it storage-access-pod -n csuf-titans -- bash' to connect." && \
+      echo "Your data is mounted at /mnt/storage" && \
+      tail -f /dev/null
+    resources:
+      requests:
+        cpu: "100m"
+        memory: "256Mi"
+      limits:
+        cpu: "500m"
+        memory: "512Mi"
+    volumeMounts:
+    - name: storage
+      mountPath: /mnt/storage
+  volumes:
+  - name: storage
+    persistentVolumeClaim:
+      claimName: temporary-storage
+  terminationGracePeriodSeconds: 30
+  tolerations:
+  - key: "node.kubernetes.io/not-ready"
+    operator: "Exists"
+    effect: "NoExecute"
+    tolerationSeconds: 86400
+  - key: "node.kubernetes.io/unreachable"
+    operator: "Exists" 
+    effect: "NoExecute"
+    tolerationSeconds: 86400
