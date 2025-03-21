@@ -87,31 +87,31 @@ spec:
               pip install --no-cache-dir -r requirements.txt
               
               echo "Creating destination directories..."
-              mkdir -p /mnt/storage/logits/synth/spectrograms
-              mkdir -p /mnt/storage/logits/synth/labels
-              mkdir -p /mnt/storage/logits/synth/logits
+              mkdir -p /mnt/storage/data/logits/synth/spectrograms
+              mkdir -p /mnt/storage/data/logits/synth/labels
+              mkdir -p /mnt/storage/data/logits/synth/logits
               
               echo "Checking audio dir contents:"
-              find /mnt/storage/logits/fma_medium -type f | head -10
+              find /mnt/storage/data/fma_medium -type f | head -10
               
               # Added check: ensure there are audio files to process
-              audio_count=$(find /mnt/storage/logits/fma_medium -type f | wc -l)
+              audio_count=$(find /mnt/storage/data/fma_medium -type f | wc -l)
               if [ "$audio_count" -eq 0 ]; then
                 echo "ERROR: No audio files to process. Exiting."
                 exit 1
               fi
               
               echo "Running spectrogram_labeler.py with logits extraction..."
-              python spectrogram_labeler.py --audio_dir /mnt/storage/logits/fma_medium --save_dir /mnt/storage/logits/synth --save_logits
+              python spectrogram_labeler.py --audio_dir /mnt/storage/data/fma_medium --save_dir /mnt/storage/data/logits/synth --save_logits
               
               echo "Checking generated files:"
-              find /mnt/storage/logits/synth -type f | head -10
+              find /mnt/storage/data/logits/synth -type f | head -10
               
               # Print statistics about generated files
               echo "File statistics:"
-              echo "Spectrograms: $(find /mnt/storage/logits/synth/spectrograms -type f -name "*.npy" | wc -l)"
-              echo "Labels: $(find /mnt/storage/logits/synth/labels -type f -name "*.lab" | wc -l)"
-              echo "Logits: $(find /mnt/storage/logits/synth/logits -type f -name "*_logits.npy" | wc -l)"
+              echo "Spectrograms: $(find /mnt/storage/data/logits/synth/spectrograms -type f -name "*.npy" | wc -l)"
+              echo "Labels: $(find /mnt/storage/data/logits/synth/labels -type f -name "*.lab" | wc -l)"
+              echo "Logits: $(find /mnt/storage/data/logits/synth/logits -type f -name "*_logits.npy" | wc -l)"
               
               echo "Job completed!"
           resources:

@@ -13,10 +13,10 @@ from utils import logger
 warnings.filterwarnings("ignore", category=FutureWarning, module="librosa")
 
 def main():
-    parser = argparse.ArgumentParser(description="Process audio from logits/fma_small into labels and spectrograms.")
+    parser = argparse.ArgumentParser(description="Process audio from data/fma_small into labels and spectrograms.")
     parser.add_argument('--voca', default=True, type=lambda x: (str(x).lower()=='true'))
-    parser.add_argument('--audio_dir', type=str, default='./logits/fma_small')
-    parser.add_argument('--save_dir', type=str, default='./logits/synth')
+    parser.add_argument('--audio_dir', type=str, default='./data/fma_small')
+    parser.add_argument('--save_dir', type=str, default='./data/logits/synth')
     # New argument to indicate dataset type
     parser.add_argument('--dataset', type=str, default='fma', choices=['fma', 'maestro'])
     # New argument to enable saving logits
