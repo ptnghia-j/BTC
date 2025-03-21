@@ -87,11 +87,12 @@ spec:
               pip install --no-cache-dir -r requirements.txt
               
               echo "Creating destination directories..."
-              mkdir -p /mnt/storage/data1/maestro_synth/spectrograms
-              mkdir -p /mnt/storage/data1/maestro_synth/labels
+              mkdir -p /mnt/storage/logits/maestro_synth/spectrograms
+              mkdir -p /mnt/storage/logits/maestro_synth/labels
+              mkdir -p /mnt/storage/logits/maestro_synth/logits
               
-              echo "Running spectrogram_labeler.py for maestro..."
-              python spectrogram_labeler.py --audio_dir /mnt/storage/data1/maestro --save_dir /mnt/storage/data1/maestro_synth --dataset maestro
+              echo "Running spectrogram_labeler.py for maestro with logits extraction..."
+              python spectrogram_labeler.py --audio_dir /mnt/storage/logits/maestro --save_dir /mnt/storage/logits/maestro_synth --dataset maestro --save_logits
               
               echo "Job completed!"
           resources:
