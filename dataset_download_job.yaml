@@ -65,7 +65,8 @@ spec:
                   echo "[$(date)] Extracting dataset using 7zip (this can take a while)..."
                   mkdir -p fma_medium
                   
-                  # Try 7zip extraction first (better compatibility with newer zip formats)
+                  # The archive contains a top-level folder named "fma_medium".
+                  # Extraction will preserve this internal structure, resulting in nested folders.
                   echo "[$(date)] Trying 7zip extraction..."
                   7z x -ofma_medium fma_medium.zip || {
                     echo "[$(date)] 7zip extraction failed, trying direct extraction with unzip..."

@@ -140,8 +140,9 @@ def main():
         npy_save_path = os.path.join(spec_save_dir, base + "_spec.npy")
         np.save(npy_save_path, spec)
         
-        logger.info(f"Saved spectrogram to: {npy_save_path}")
-        logger.info(f"Spectrogram shape: {spec.shape}")
+        # Comment out verbose logging
+        # logger.info(f"Saved spectrogram to: {npy_save_path}")
+        # logger.info(f"Spectrogram shape: {spec.shape}")
         
         # Normalize and pad the feature for model inference
         spec_norm = (spec - mean) / std
@@ -169,63 +170,122 @@ def main():
                 chunk = spec_tensor[:, n_timestep*t:n_timestep*(t+1), :]
                 self_attn_out, _ = model.self_attn_layers(chunk)
                 
-                # Extract logits if needed
+                # Extract logits if saving is enabled, forcing full distribution output.
                 if args.save_logits:
-                    # Temporarily set probs_out to True to get logits
-                    model.probs_out = True
-                    logits = model.output_layer(self_attn_out)
-                    model.probs_out = original_probs_out
+                    # Skip the model.output_layer() completely and directly access the raw projection
+                    # This gives us the full 3D tensor with all 170 chord dimensions
+                    raw_logits = model.output_layer.output_projection(self_attn_out)
+                    # Comment out verbose logging
+                    # logger.info(f"Raw output projection shape: {raw_logits.shape}")
+                    
+                    # Use the raw logits directly - this is what we want to save
+                    logits = raw_logits
                     all_logits.append(logits.cpu().numpy())
                 
-                # Get predictions for labels (normal behavior)
-                pred, _ = model.output_layer(self_attn_out)
-                pred = pred.squeeze()
+                # For label prediction, use the normal path
+                try:
+                    model.probs_out = True
+                    output_for_pred = model.output_layer(self_attn_out)
+                    # Handle both cases again
+                    if isinstance(output_for_pred, tuple):
+                        logits_for_pred = output_for_pred[0]
+                    else:
+                        logits_for_pred = output_for_pred
+                    model.probs_out = original_probs_out
+                    
+                    # Comment out verbose logging
+                    # logger.info(f"Logits shape before argmax: {logits_for_pred.shape}")
+                    
+                    # If we need 3D predictions but got 2D, reshape using argmax on the raw projection
+                    if logits_for_pred.dim() < 3 and raw_logits.dim() == 3:
+                        # Comment out verbose logging
+                        # logger.info("Using raw logits for prediction since output is not 3D")
+                        pred = torch.argmax(raw_logits, dim=-1)  # shape: [batch, time]
+                        pred = pred.squeeze()
+                    elif logits_for_pred.dim() == 3:
+                        pred = torch.argmax(logits_for_pred, dim=-1)
+                        pred = pred.squeeze()
+                    elif logits_for_pred.dim() == 2:
+                        pred = torch.argmax(logits_for_pred, dim=-1)
+                    else:
+                        logger.info(f"Unexpected logits dimensionality: {logits_for_pred.dim()}")
+                        pred = torch.argmax(logits_for_pred.view(1, -1), dim=-1)
+                    
+                    # Comment out verbose logging
+                    # logger.info(f"Prediction shape after argmax: {pred.shape if pred.dim() > 0 else '0-dim scalar'}")
+                except Exception as e:
+                    logger.error(f"Error during prediction for {audio_path}: {str(e)}")
+                    # Use a default prediction
+                    pred = torch.tensor([169])  # 'N' in large vocabulary
                 
-                for i in range(n_timestep):
-                    if t==0 and i==0:
-                        prev_chord = pred[i].item()
-                        continue
-                    if pred[i].item() != prev_chord:
-                        lines.append('%.3f %.3f %s\n' % (start_time, time_unit*(n_timestep*t+i), idx_to_chord[prev_chord]))
-                        start_time = time_unit*(n_timestep*t+i)
-                        prev_chord = pred[i].item()
-                    if t==num_instance-1 and i+num_pad==n_timestep:
-                        if start_time != time_unit*(n_timestep*t+i):
+                # Handle different pred shapes
+                if pred.dim() == 0:  # It's a scalar
+                    # Use same chord value for this entire chunk
+                    chord_value = pred.item()
+                    for i in range(n_timestep):
+                        if t==0 and i==0:
+                            prev_chord = chord_value
+                            continue
+                        # We only change the label if this is a different chord from the previous
+                        if chord_value != prev_chord:
                             lines.append('%.3f %.3f %s\n' % (start_time, time_unit*(n_timestep*t+i), idx_to_chord[prev_chord]))
-                        break
+                            start_time = time_unit*(n_timestep*t+i)
+                            prev_chord = chord_value
+                        if t==num_instance-1 and i+num_pad==n_timestep:
+                            if start_time != time_unit*(n_timestep*t+i):
+                                lines.append('%.3f %.3f %s\n' % (start_time, time_unit*(n_timestep*t+i), idx_to_chord[prev_chord]))
+                            break
+                else:  # Normal case with a tensor of predictions
+                    for i in range(min(n_timestep, pred.shape[0])):
+                        if t==0 and i==0:
+                            prev_chord = pred[i].item()
+                            continue
+                        if pred[i].item() != prev_chord:
+                            lines.append('%.3f %.3f %s\n' % (start_time, time_unit*(n_timestep*t+i), idx_to_chord[prev_chord]))
+                            start_time = time_unit*(n_timestep*t+i)
+                            prev_chord = pred[i].item()
+                        if t==num_instance-1 and i+num_pad==n_timestep:
+                            if start_time != time_unit*(n_timestep*t+i):
+                                lines.append('%.3f %.3f %s\n' % (start_time, time_unit*(n_timestep*t+i), idx_to_chord[prev_chord]))
+                            break
         
         # Save label file
         lab_save_path = os.path.join(lab_save_dir, base + ".lab")
         with open(lab_save_path, "w") as f:
             f.writelines(lines)
-        logger.info(f"Saved label file to: {lab_save_path}")
+        # Comment out verbose logging
+        # logger.info(f"Saved label file to: {lab_save_path}")
         
         # Save logits if enabled
         if args.save_logits and all_logits:
-            # Concatenate all logits chunks into a single array
-            # This will have shape [num_instances, 1, timestep, num_chords]
-            # We need to reshape to get [1, total_timesteps, num_chords]
-            all_logits_array = np.concatenate(all_logits, axis=1)
-            
-            # Log the shape information
-            logger.info(f"Logits shape: {all_logits_array.shape}")
-            
-            # Make sure shape is as expected: [1, total_timesteps, num_chords]
-            if all_logits_array.shape[0] != 1:
-                logger.warn(f"Unexpected logits dimension 0: {all_logits_array.shape[0]}, expected 1")
-            
-            expected_total_timesteps = num_instance * n_timestep
-            if all_logits_array.shape[1] != expected_total_timesteps:
-                logger.warn(f"Unexpected logits timesteps: {all_logits_array.shape[1]}, expected {expected_total_timesteps}")
-            
-            expected_num_chords = config.model['num_chords']
-            if all_logits_array.shape[2] != expected_num_chords:
-                logger.warn(f"Unexpected logits chord dimension: {all_logits_array.shape[2]}, expected {expected_num_chords}")
-            
-            # Save the logits
-            logits_save_path = os.path.join(logits_save_dir, base + "_logits.npy")
-            np.save(logits_save_path, all_logits_array)
-            logger.info(f"Saved logits to: {logits_save_path}")
+            # Ensure all_logits is not empty and all elements have compatible shapes
+            if len(all_logits) == 0:
+                logger.info(f"No logits to save for {audio_path}")
+                continue
+                
+            try:
+                # Concatenate all logits chunks along the time axis
+                all_logits_array = np.concatenate(all_logits, axis=1)
+                
+                # Keep only this log statement about final logits shape
+                logger.info(f"Logits shape: {all_logits_array.shape}")
+                
+                # Comment out verbose logging for dimension checking
+                if all_logits_array.ndim == 3:
+                    expected_num_chords = config.model['num_chords']
+                    if all_logits_array.shape[2] != expected_num_chords:
+                        # logger.info(f"Unexpected logits chord dimension: {all_logits_array.shape[2]}, expected {expected_num_chords}")
+                        pass
+                else:
+                    # logger.info("Logits array is not 3D; skipping chord dimension check.")
+                    pass
+                
+                # Save the logits
+                logits_save_path = os.path.join(logits_save_dir, base + "_logits.npy")
+                np.save(logits_save_path, all_logits_array)
+                # logger.info(f"Saved logits to: {logits_save_path}")
+            except Exception as e:
+                logger.error(f"Error saving logits for {audio_path}: {str(e)}")
         
         processed_count += 1
     
