@@ -75,6 +75,16 @@ spec:
           env:
             - name: PYTHONPATH
               value: /mnt/storage/BTC
+            - name: SAVE_LOGITS
+              value: "true"
+            - name: AUDIO_DIR
+              value: "/mnt/storage/data/maestro"
+            - name: SAVE_DIR
+              value: "/mnt/storage/data/logits/maestro_synth"
+            - name: DATASET_TYPE
+              value: "maestro"
+            - name: VOCA_MODE
+              value: "true"
           command:
             - bash
             - -c
@@ -87,12 +97,39 @@ spec:
               pip install --no-cache-dir -r requirements.txt
               
               echo "Creating destination directories..."
-              mkdir -p /mnt/storage/data/logits/maestro_synth/spectrograms
-              mkdir -p /mnt/storage/data/logits/maestro_synth/labels
-              mkdir -p /mnt/storage/data/logits/maestro_synth/logits
+              mkdir -p ${SAVE_DIR}/spectrograms
+              mkdir -p ${SAVE_DIR}/labels
               
-              echo "Running spectrogram_labeler.py for maestro with logits extraction..."
-              python spectrogram_labeler.py --audio_dir /mnt/storage/data/maestro --save_dir /mnt/storage/data/logits/maestro_synth --dataset maestro --save_logits
+              if [ "${SAVE_LOGITS}" = "true" ]; then
+                mkdir -p ${SAVE_DIR}/logits
+                echo "Will save logits to ${SAVE_DIR}/logits"
+                LOGITS_FLAG="--save_logits"
+              else
+                echo "Logits saving is disabled"
+                LOGITS_FLAG=""
+              fi
+              
+              echo "Running spectrogram_labeler.py with the following configuration:"
+              echo "Audio directory: ${AUDIO_DIR}"
+              echo "Save directory: ${SAVE_DIR}"
+              echo "Dataset type: ${DATASET_TYPE}"
+              echo "Voca mode: ${VOCA_MODE}"
+              echo "Save logits: ${SAVE_LOGITS}"
+              
+              CMD="python spectrogram_labeler.py --audio_dir ${AUDIO_DIR} --save_dir ${SAVE_DIR} --dataset ${DATASET_TYPE} --voca ${VOCA_MODE} ${LOGITS_FLAG}"
+              echo "Running command: $CMD"
+              eval $CMD
+              
+              echo "Checking generated files:"
+              find ${SAVE_DIR} -type f | head -10
+              
+              echo "File statistics:"
+              echo "Spectrograms: $(find ${SAVE_DIR}/spectrograms -type f -name "*.npy" | wc -l)"
+              echo "Labels: $(find ${SAVE_DIR}/labels -type f -name "*.lab" | wc -l)"
+              
+              if [ "${SAVE_LOGITS}" = "true" ]; then
+                echo "Logits: $(find ${SAVE_DIR}/logits -type f -name "*_logits.npy" | wc -l)"
+              fi
               
               echo "Job completed!"
           resources:

@@ -1,0 +1,215 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: check-logits-shapes
+  namespace: csuf-titans
+  labels:
+    app: logits-analysis
+spec:
+  backoffLimit: 2
+  template:
+    metadata:
+      labels:
+        app: logits-analysis
+    spec:
+      restartPolicy: Never
+      tolerations:
+      - key: "node.kubernetes.io/not-ready"
+        operator: "Exists"
+        effect: "NoExecute"
+        tolerationSeconds: 86400
+      - key: "node.kubernetes.io/unreachable"
+        operator: "Exists"
+        effect: "NoExecute"
+        tolerationSeconds: 86400
+      initContainers:
+        - name: setup
+          image: alpine:3.16
+          imagePullPolicy: IfNotPresent
+          command:
+            - sh
+            - -c
+            - |
+              set -ex
+              echo "[$(date)] Starting setup..."
+              
+              echo "[$(date)] Installing packages..."
+              apk update && apk add --no-cache git curl python3 py3-pip tzdata bash
+              
+              echo "[$(date)] Creating directories..."
+              mkdir -p /mnt/storage/BTC
+              
+              echo "[$(date)] Cloning repository..."
+              cd /mnt/storage
+              if ! git clone --depth 1 https://gitlab.com/ptnghia-j/BTC BTC; then
+                echo "[$(date)] Failed to clone repository, retrying..."
+                rm -rf BTC || true
+                git clone --depth 1 https://gitlab.com/ptnghia-j/BTC BTC
+              fi
+              
+              if [ ! -d "BTC" ]; then
+                echo "[$(date)] ERROR: Repository clone failed even after retry"
+                exit 1
+              fi
+              
+              echo "[$(date)] Repository cloned successfully."
+              echo "[$(date)] Setup completed successfully."
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "1Gi"
+            limits:
+              cpu: "1"
+              memory: "2Gi"
+          volumeMounts:
+            - name: storage
+              mountPath: /mnt/storage
+      containers:
+        - name: logits-analyzer
+          image: python:3.8-slim
+          workingDir: /mnt/storage/BTC
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: PYTHONPATH
+              value: /mnt/storage/BTC
+            - name: LOGITS_DIR
+              value: "/mnt/storage/data/logits/synth/logits"
+            - name: REPORT_PATH
+              value: "/mnt/storage/data/logits_shape_report.txt"
+            - name: PATTERN
+              value: "_logits.npy"
+          command:
+            - bash
+            - -c
+            - |
+              set -ex
+              echo "Installing Python dependencies..."
+              pip install --no-cache-dir numpy
+              
+              echo "Creating check_logits_shapes.py script..."
+              cat > check_logits_shapes.py << 'EOF'
+              import os
+              import sys
+              import numpy as np
+              import argparse
+              from collections import defaultdict
+
+              def main():
+                  parser = argparse.ArgumentParser(description="Check the shapes of logits files in a directory")
+                  parser.add_argument('--logits_dir', type=str, default='/mnt/storage/data/logits/synth/logits',
+                                      help='Directory containing logits files')
+                  parser.add_argument('--pattern', type=str, default='_logits.npy',
+                                      help='File pattern to match')
+                  parser.add_argument('--save_report', action='store_true',
+                                      help='Save the report to a file')
+                  parser.add_argument('--report_path', type=str, default='/mnt/storage/data/logits_report.txt',
+                                      help='Path to save the report')
+                  args = parser.parse_args()
+                  
+                  print(f"Analyzing logits files in: {args.logits_dir}")
+                  
+                  # Dictionary to store shape frequencies
+                  shape_counts = defaultdict(int)
+                  shape_examples = defaultdict(list)
+                  total_files = 0
+                  problematic_files = []
+                  
+                  # Walk through all subdirectories in the logits directory
+                  for root, dirs, files in os.walk(args.logits_dir):
+                      for file in files:
+                          if args.pattern in file:
+                              total_files += 1
+                              file_path = os.path.join(root, file)
+                              
+                              try:
+                                  # Load the logits file
+                                  logits = np.load(file_path, allow_pickle=False)
+                                  
+                                  # Get the shape as a string
+                                  shape_str = str(logits.shape)
+                                  
+                                  # Record the shape
+                                  shape_counts[shape_str] += 1
+                                  
+                                  # Store up to 5 examples for each shape
+                                  if len(shape_examples[shape_str]) < 5:
+                                      shape_examples[shape_str].append(file_path)
+                                  
+                                  # Check if the shape is problematic
+                                  if len(logits.shape) != 3 or logits.shape[0] != 1:
+                                      problematic_files.append((file_path, shape_str))
+                                      
+                              except Exception as e:
+                                  problematic_files.append((file_path, f"Error: {str(e)}"))
+                  
+                  # Generate report
+                  report = []
+                  report.append(f"Logits Shape Analysis Report")
+                  report.append(f"----------------------------")
+                  report.append(f"Total logits files analyzed: {total_files}")
+                  report.append(f"Number of distinct shapes: {len(shape_counts)}")
+                  report.append("")
+                  
+                  # Sort shapes by frequency (most common first)
+                  sorted_shapes = sorted(shape_counts.items(), key=lambda x: x[1], reverse=True)
+                  
+                  report.append("Shape Distribution:")
+                  report.append("------------------")
+                  for shape, count in sorted_shapes:
+                      report.append(f"{shape}: {count} files ({count/total_files*100:.2f}%)")
+                  report.append("")
+                  
+                  # Example files for each shape
+                  report.append("Examples for each shape:")
+                  report.append("-----------------------")
+                  for shape, examples in shape_examples.items():
+                      report.append(f"{shape}:")
+                      for example in examples:
+                          report.append(f"  - {os.path.basename(example)}")
+                      report.append("")
+                  
+                  # Problematic files
+                  if problematic_files:
+                      report.append("Problematic Files:")
+                      report.append("-----------------")
+                      for file_path, issue in problematic_files:
+                          report.append(f"{os.path.basename(file_path)}: {issue}")
+                      report.append("")
+                  
+                  # Print the report
+                  for line in report:
+                      print(line)
+                  
+                  # Save the report if requested
+                  if args.save_report:
+                      os.makedirs(os.path.dirname(args.report_path), exist_ok=True)
+                      with open(args.report_path, 'w') as f:
+                          for line in report:
+                              f.write(line + "\n")
+                      print(f"Report saved to: {args.report_path}")
+
+              if __name__ == "__main__":
+                  main()
+              EOF
+              
+              echo "Running logits shape analysis..."
+              python check_logits_shapes.py --logits_dir ${LOGITS_DIR} --pattern ${PATTERN} --save_report --report_path ${REPORT_PATH}
+              
+              echo "Checking if report file was created:"
+              ls -la ${REPORT_PATH} || echo "Report file not found!"
+              
+              echo "Job completed!"
+          resources:
+            requests:
+              cpu: "1"
+              memory: "2Gi"
+            limits:
+              cpu: "2"
+              memory: "4Gi"
+          volumeMounts:
+            - name: storage
+              mountPath: /mnt/storage
+      volumes:
+        - name: storage
+          persistentVolumeClaim:
+            claimName: temporary-storage

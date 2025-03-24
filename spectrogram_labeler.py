@@ -16,7 +16,7 @@ def main():
     parser = argparse.ArgumentParser(description="Process audio from data/fma_small into labels and spectrograms.")
     parser.add_argument('--voca', default=True, type=lambda x: (str(x).lower()=='true'))
     parser.add_argument('--audio_dir', type=str, default='./data/fma_small')
-    parser.add_argument('--save_dir', type=str, default='./data/logits/synth')
+    parser.add_argument('--save_dir', type=str, default='./data/synth')
     # New argument to indicate dataset type
     parser.add_argument('--dataset', type=str, default='fma', choices=['fma', 'maestro'])
     # New argument to enable saving logits
@@ -140,9 +140,8 @@ def main():
         npy_save_path = os.path.join(spec_save_dir, base + "_spec.npy")
         np.save(npy_save_path, spec)
         
-        # Comment out verbose logging
-        # logger.info(f"Saved spectrogram to: {npy_save_path}")
-        # logger.info(f"Spectrogram shape: {spec.shape}")
+        logger.info(f"Saved spectrogram to: {npy_save_path}")
+        logger.info(f"Spectrogram shape: {spec.shape}")
         
         # Normalize and pad the feature for model inference
         spec_norm = (spec - mean) / std
@@ -175,115 +174,63 @@ def main():
                     # Skip the model.output_layer() completely and directly access the raw projection
                     # This gives us the full 3D tensor with all 170 chord dimensions
                     raw_logits = model.output_layer.output_projection(self_attn_out)
-                    # Comment out verbose logging
-                    # logger.info(f"Raw output projection shape: {raw_logits.shape}")
-                    
-                    # Use the raw logits directly - this is what we want to save
-                    logits = raw_logits
+                    # Ensure consistent dimensionality - always save as 3D tensors [1, time, chords]
+                    if raw_logits.dim() == 3:
+                        logits = raw_logits
+                    else:
+                        # If somehow we got a 2D tensor, reshape to 3D
+                        logits = raw_logits.unsqueeze(0)
                     all_logits.append(logits.cpu().numpy())
                 
-                # For label prediction, use the normal path
-                try:
-                    model.probs_out = True
-                    output_for_pred = model.output_layer(self_attn_out)
-                    # Handle both cases again
-                    if isinstance(output_for_pred, tuple):
-                        logits_for_pred = output_for_pred[0]
-                    else:
-                        logits_for_pred = output_for_pred
-                    model.probs_out = original_probs_out
-                    
-                    # Comment out verbose logging
-                    # logger.info(f"Logits shape before argmax: {logits_for_pred.shape}")
-                    
-                    # If we need 3D predictions but got 2D, reshape using argmax on the raw projection
-                    if logits_for_pred.dim() < 3 and raw_logits.dim() == 3:
-                        # Comment out verbose logging
-                        # logger.info("Using raw logits for prediction since output is not 3D")
-                        pred = torch.argmax(raw_logits, dim=-1)  # shape: [batch, time]
-                        pred = pred.squeeze()
-                    elif logits_for_pred.dim() == 3:
-                        pred = torch.argmax(logits_for_pred, dim=-1)
-                        pred = pred.squeeze()
-                    elif logits_for_pred.dim() == 2:
-                        pred = torch.argmax(logits_for_pred, dim=-1)
-                    else:
-                        logger.info(f"Unexpected logits dimensionality: {logits_for_pred.dim()}")
-                        pred = torch.argmax(logits_for_pred.view(1, -1), dim=-1)
-                    
-                    # Comment out verbose logging
-                    # logger.info(f"Prediction shape after argmax: {pred.shape if pred.dim() > 0 else '0-dim scalar'}")
-                except Exception as e:
-                    logger.error(f"Error during prediction for {audio_path}: {str(e)}")
-                    # Use a default prediction
-                    pred = torch.tensor([169])  # 'N' in large vocabulary
+                # Get predictions for labels (normal behavior)
+                pred, _ = model.output_layer(self_attn_out)
+                pred = pred.squeeze()
                 
-                # Handle different pred shapes
-                if pred.dim() == 0:  # It's a scalar
-                    # Use same chord value for this entire chunk
-                    chord_value = pred.item()
-                    for i in range(n_timestep):
-                        if t==0 and i==0:
-                            prev_chord = chord_value
-                            continue
-                        # We only change the label if this is a different chord from the previous
-                        if chord_value != prev_chord:
+                for i in range(n_timestep):
+                    if t==0 and i==0:
+                        prev_chord = pred[i].item()
+                        continue
+                    if pred[i].item() != prev_chord:
+                        lines.append('%.3f %.3f %s\n' % (start_time, time_unit*(n_timestep*t+i), idx_to_chord[prev_chord]))
+                        start_time = time_unit*(n_timestep*t+i)
+                        prev_chord = pred[i].item()
+                    if t==num_instance-1 and i+num_pad==n_timestep:
+                        if start_time != time_unit*(n_timestep*t+i):
                             lines.append('%.3f %.3f %s\n' % (start_time, time_unit*(n_timestep*t+i), idx_to_chord[prev_chord]))
-                            start_time = time_unit*(n_timestep*t+i)
-                            prev_chord = chord_value
-                        if t==num_instance-1 and i+num_pad==n_timestep:
-                            if start_time != time_unit*(n_timestep*t+i):
-                                lines.append('%.3f %.3f %s\n' % (start_time, time_unit*(n_timestep*t+i), idx_to_chord[prev_chord]))
-                            break
-                else:  # Normal case with a tensor of predictions
-                    for i in range(min(n_timestep, pred.shape[0])):
-                        if t==0 and i==0:
-                            prev_chord = pred[i].item()
-                            continue
-                        if pred[i].item() != prev_chord:
-                            lines.append('%.3f %.3f %s\n' % (start_time, time_unit*(n_timestep*t+i), idx_to_chord[prev_chord]))
-                            start_time = time_unit*(n_timestep*t+i)
-                            prev_chord = pred[i].item()
-                        if t==num_instance-1 and i+num_pad==n_timestep:
-                            if start_time != time_unit*(n_timestep*t+i):
-                                lines.append('%.3f %.3f %s\n' % (start_time, time_unit*(n_timestep*t+i), idx_to_chord[prev_chord]))
-                            break
+                        break
         
         # Save label file
         lab_save_path = os.path.join(lab_save_dir, base + ".lab")
         with open(lab_save_path, "w") as f:
             f.writelines(lines)
-        # Comment out verbose logging
-        # logger.info(f"Saved label file to: {lab_save_path}")
+        logger.info(f"Saved label file to: {lab_save_path}")
         
         # Save logits if enabled
         if args.save_logits and all_logits:
-            # Ensure all_logits is not empty and all elements have compatible shapes
-            if len(all_logits) == 0:
-                logger.info(f"No logits to save for {audio_path}")
-                continue
-                
             try:
-                # Concatenate all logits chunks along the time axis
+                # Ensure all logits have the same dimensionality before concatenation
+                for i in range(len(all_logits)):
+                    # Check if any logits are 2D [time, chords] instead of 3D [1, time, chords]
+                    if all_logits[i].ndim == 2:
+                        logger.info(f"Found 2D logits at index {i}, reshaping to 3D")
+                        all_logits[i] = all_logits[i].reshape(1, all_logits[i].shape[0], all_logits[i].shape[1])
+                    elif all_logits[i].ndim == 3 and all_logits[i].shape[0] != 1:
+                        logger.info(f"Found 3D logits with first dim != 1 at index {i}, reshaping")
+                        all_logits[i] = all_logits[i].reshape(1, -1, all_logits[i].shape[2])
+                
+                # Concatenate all logits chunks along the time axis (dim=1 for 3D tensors)
                 all_logits_array = np.concatenate(all_logits, axis=1)
                 
-                # Keep only this log statement about final logits shape
-                logger.info(f"Logits shape: {all_logits_array.shape}")
+                # Verify final shape is [1, timesteps, num_chords]
+                if all_logits_array.ndim != 3:
+                    logger.warning(f"Final logits array is {all_logits_array.ndim}D, reshaping to 3D")
+                    all_logits_array = all_logits_array.reshape(1, -1, config.model['num_chords'])
                 
-                # Comment out verbose logging for dimension checking
-                if all_logits_array.ndim == 3:
-                    expected_num_chords = config.model['num_chords']
-                    if all_logits_array.shape[2] != expected_num_chords:
-                        # logger.info(f"Unexpected logits chord dimension: {all_logits_array.shape[2]}, expected {expected_num_chords}")
-                        pass
-                else:
-                    # logger.info("Logits array is not 3D; skipping chord dimension check.")
-                    pass
+                logger.info(f"Logits final shape: {all_logits_array.shape}")
                 
                 # Save the logits
                 logits_save_path = os.path.join(logits_save_dir, base + "_logits.npy")
                 np.save(logits_save_path, all_logits_array)
-                # logger.info(f"Saved logits to: {logits_save_path}")
             except Exception as e:
                 logger.error(f"Error saving logits for {audio_path}: {str(e)}")
         
